@@ -1,5 +1,5 @@
 import React from "react";
-import { Wallet, CreditCard, Landmark } from "lucide-react";
+import { Wallet, CreditCard, Landmark, Trash2 } from "lucide-react";
 import { C, serif, sans, fmt } from "../lib/theme";
 import { EXPENSE_TREE } from "../lib/categories";
 
@@ -114,24 +114,33 @@ export function SubPicker({ selected, onToggle }) {
   );
 }
 
-export function TxRow({ t, isFirst }) {
+export function TxRow({ t, isFirst, onDelete, accountNameOf }) {
+  const isTransfer = t.type === "transfer";
+  const nameOf = accountNameOf || ((id) => id);
   return (
     <div
-      className="flex items-center justify-between px-4 py-2.5"
+      className="flex items-center justify-between px-4 py-2.5 gap-2"
       style={{ borderTop: isFirst ? "none" : `1px solid ${C.line}`, fontFamily: sans, fontSize: 13.5 }}
     >
-      <div className="flex flex-col">
+      <div className="flex flex-col min-w-0">
         <span style={{ color: C.ink, fontWeight: 600 }}>
-          {t.category} · {t.sub}
+          {isTransfer ? `轉帳：${nameOf(t.fromAccountId)} → ${nameOf(t.toAccountId)}` : `${t.category} · ${t.sub}`}
         </span>
         <span style={{ color: C.inkSoft, fontSize: 12 }}>
           {t.date}　{t.note}
         </span>
       </div>
-      <span style={{ color: t.type === "expense" ? C.red : C.green, fontFamily: serif, fontWeight: 700 }}>
-        {t.type === "expense" ? "-" : "+"}
-        {fmt(t.amount).replace("NT$ ", "")}
-      </span>
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <span style={{ color: isTransfer ? C.gold : t.type === "expense" ? C.red : C.green, fontFamily: serif, fontWeight: 700 }}>
+          {isTransfer ? "" : t.type === "expense" ? "-" : "+"}
+          {fmt(t.amount).replace("NT$ ", "")}
+        </span>
+        {onDelete && (
+          <button onClick={() => onDelete(t)} style={{ color: C.inkSoft }} title="刪除這筆">
+            <Trash2 size={14} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }

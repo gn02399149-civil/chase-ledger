@@ -2,10 +2,10 @@ import React, { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { C, serif, sans, fmt, monthLabel, addMonths } from "../lib/theme";
 import { ALL_TREE } from "../lib/categories";
-import { queryTransactionsByMonth, queryTransactionsByRange, thisMonthKey } from "../lib/db";
+import { queryTransactionsByMonth, queryTransactionsByRange, deleteTransaction, thisMonthKey } from "../lib/db";
 import { TxRow } from "./Shared";
 
-export default function DetailTab({ uid }) {
+export default function DetailTab({ uid, accounts = [] }) {
   const [mode, setMode] = useState("month");
   const [month, setMonth] = useState(thisMonthKey());
   const [start, setStart] = useState(() => {
@@ -16,24 +16,46 @@ export default function DetailTab({ uid }) {
   const [end, setEnd] = useState(new Date().toISOString().slice(0, 10));
   const [selectedSubs, setSelectedSubs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [txs, setTxs] = useState([]);
+  const [reloadTick, setReloadTick] = useState(0);
 
+  const nameOf = (id) => accounts.find((a) => a.id === id)?.name || id;
   const toggleSub = (s) => setSelectedSubs((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError("");
     const run = mode === "month" ? queryTransactionsByMonth(uid, month) : queryTransactionsByRange(uid, start, end);
-    run.then((res) => {
-      if (!cancelled) {
-        setTxs(res);
-        setLoading(false);
-      }
-    });
+    run
+      .then((res) => {
+        if (!cancelled) {
+          setTxs(res);
+          setLoading(false);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          console.error(e);
+          setLoading(false);
+          setError(
+            e?.code === "failed-precondition" || /index/i.test(e?.message || "")
+              ? "這個查詢需要先在 Firestore 建立一個複合索引（一次性設定）。打開瀏覽器的開發者工具（F12）→Console，會有一行紅字錯誤訊息附帶一個連結，點它就能自動建好索引，等一兩分鐘後回來重新整理即可。"
+              : "讀取失敗，請檢查網路連線後重新整理頁面再試一次。"
+          );
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, [uid, mode, month, start, end]);
+  }, [uid, mode, month, start, end, reloadTick]);
+
+  const handleDelete = async (t) => {
+    if (!window.confirm("確定要刪除這筆記錄嗎？帳戶餘額跟相關統計會自動還原。")) return;
+    await deleteTransaction(uid, t);
+    setReloadTick((n) => n + 1);
+  };
 
   const filtered = selectedSubs.length === 0 ? txs : txs.filter((t) => selectedSubs.includes(t.sub));
   const income = filtered.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
@@ -144,10 +166,12 @@ export default function DetailTab({ uid }) {
       <div style={{ border: `1px solid ${C.line}`, borderRadius: 10, overflow: "hidden", background: C.cardBg }}>
         {loading ? (
           <div style={{ padding: 24, textAlign: "center", color: C.inkSoft, fontFamily: sans, fontSize: 13 }}>讀取中…</div>
+        ) : error ? (
+          <div style={{ padding: 24, color: C.red, fontFamily: sans, fontSize: 13, lineHeight: 1.6 }}>{error}</div>
         ) : filtered.length === 0 ? (
           <div style={{ padding: 24, textAlign: "center", color: C.inkSoft, fontFamily: sans, fontSize: 13 }}>此區間沒有符合的紀錄</div>
         ) : (
-          filtered.map((t, i) => <TxRow key={t.id} t={t} isFirst={i === 0} />)
+          filtered.map((t, i) => <TxRow key={t.id} t={t} isFirst={i === 0} onDelete={handleDelete} accountNameOf={nameOf} />)
         )}
       </div>
     </div>

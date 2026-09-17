@@ -144,6 +144,7 @@ export async function fetchRecentTransactions(uid, max = 6) {
 /* ---------------------------- 新增批次交易 ----------------------------
  * 用「一次 writeBatch」寫入所有交易明細＋同步更新帳戶餘額／淨資產／本月統計／預算彙總。
  * 全部用 increment()，完全不需要先讀舊值，離線時也能排隊、恢復連線後自動送出。
+ * txs 裡每筆可以是 expense/income（category, sub, accountId）或 transfer（fromAccountId, toAccountId），沒有分類。
  */
 export async function addTransactionsBatch(uid, txs) {
   const batch = writeBatch(db);
@@ -152,6 +153,24 @@ export async function addTransactionsBatch(uid, txs) {
     const txRef = doc(col(uid, "transactions"));
     const month = monthKey(t.date);
     const year = yearKey(t.date);
+
+    if (t.type === "transfer") {
+      batch.set(txRef, {
+        date: t.date,
+        month,
+        year,
+        type: "transfer",
+        fromAccountId: t.fromAccountId,
+        toAccountId: t.toAccountId,
+        amount: t.amount,
+        note: t.note || "",
+        createdAt: Date.now(),
+      });
+      batch.set(docRef(uid, "accounts", t.fromAccountId), { balance: increment(-t.amount) }, { merge: true });
+      batch.set(docRef(uid, "accounts", t.toAccountId), { balance: increment(t.amount) }, { merge: true });
+      return; // 轉帳是使用者自己帳戶間互轉，不影響淨資產、不算收支、不進預算
+    }
+
     batch.set(txRef, {
       date: t.date,
       month,
@@ -182,8 +201,12 @@ export async function addTransactionsBatch(uid, txs) {
     }
   });
 
-  const totalDelta = txs.reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
-  batch.set(metaRef(uid, "netWorthCounter"), { value: increment(totalDelta) }, { merge: true });
+  const totalDelta = txs
+    .filter((t) => t.type !== "transfer")
+    .reduce((s, t) => s + (t.type === "income" ? t.amount : -t.amount), 0);
+  if (totalDelta) {
+    batch.set(metaRef(uid, "netWorthCounter"), { value: increment(totalDelta) }, { merge: true });
+  }
 
   const nowMonth = thisMonthKey();
   const incomeThisMonth = txs.filter((t) => t.type === "income" && monthKey(t.date) === nowMonth).reduce((s, t) => s + t.amount, 0);
@@ -196,6 +219,75 @@ export async function addTransactionsBatch(uid, txs) {
     );
   }
 
+  await batch.commit();
+}
+
+/* ---------------------------- 刪除單筆交易 ----------------------------
+ * 刪除時要把它當初造成的影響「反著做一次」：帳戶餘額、淨資產、本月統計（只在同一個月才需要）、
+ * 預算彙總（只有支出才會動到），最後才刪除這筆交易本身。
+ */
+export async function deleteTransaction(uid, t) {
+  const batch = writeBatch(db);
+  const txRef = docRef(uid, "transactions", t.id);
+  batch.delete(txRef);
+
+  if (t.type === "transfer") {
+    batch.set(docRef(uid, "accounts", t.fromAccountId), { balance: increment(t.amount) }, { merge: true });
+    batch.set(docRef(uid, "accounts", t.toAccountId), { balance: increment(-t.amount) }, { merge: true });
+    await batch.commit();
+    return;
+  }
+
+  const delta = t.type === "income" ? -t.amount : t.amount; // 反向操作
+  batch.set(docRef(uid, "accounts", t.accountId), { balance: increment(delta) }, { merge: true });
+  batch.set(metaRef(uid, "netWorthCounter"), { value: increment(delta) }, { merge: true });
+
+  if (t.type === "expense") {
+    batch.set(
+      doc(db, "users", uid, "budgetSummaries", t.month),
+      { spentBySub: { [t.sub]: increment(-t.amount) } },
+      { merge: true }
+    );
+    batch.set(
+      doc(db, "users", uid, "budgetSummariesAnnual", t.year),
+      { spentBySub: { [t.sub]: increment(-t.amount) } },
+      { merge: true }
+    );
+  }
+
+  if (t.month === thisMonthKey()) {
+    batch.set(
+      metaRef(uid, "currentMonthStats"),
+      { income: increment(t.type === "income" ? -t.amount : 0), expense: increment(t.type === "expense" ? -t.amount : 0) },
+      { merge: true }
+    );
+  }
+
+  await batch.commit();
+}
+
+/* ---------------------------- 帳戶間轉帳 ----------------------------
+ * 轉帳不算收入也不算支出：只搬動兩個帳戶的餘額，不影響淨資產、不影響預算。
+ * 一樣用 increment()，不需要先讀舊餘額。
+ */
+export async function addTransfer(uid, { date, fromAccountId, toAccountId, amount, note }) {
+  const batch = writeBatch(db);
+  const txRef = doc(col(uid, "transactions"));
+  const month = monthKey(date);
+  const year = yearKey(date);
+  batch.set(txRef, {
+    date,
+    month,
+    year,
+    type: "transfer",
+    fromAccountId,
+    toAccountId,
+    amount,
+    note: note || "",
+    createdAt: Date.now(),
+  });
+  batch.set(docRef(uid, "accounts", fromAccountId), { balance: increment(-amount) }, { merge: true });
+  batch.set(docRef(uid, "accounts", toAccountId), { balance: increment(amount) }, { merge: true });
   await batch.commit();
 }
 
@@ -223,14 +315,77 @@ export async function ensureMonthRollover(uid) {
     const value = counterSnap.exists() ? counterSnap.data().value || 0 : 0;
     const points = trendSnap.exists() ? trendSnap.data().points || [] : [];
     const withoutOld = points.filter((p) => p.month !== stats.month);
-    const nextPoints = [...withoutOld, { month: stats.month, value }].slice(-24); // 只保留近24個月
+    const nextPoints = [...withoutOld, { month: stats.month, value }].slice(-600); // 最多保留50年，實務上不會被裁到
 
     await setDoc(metaRef(uid, "netWorthTrend"), { points: nextPoints });
     await setDoc(metaRef(uid, "currentMonthStats"), { month: nowMonth, income: 0, expense: 0 });
   }
 }
 
-/* ---------------------------- 初次登入：建立預設資料 ---------------------------- */
+/* ---------------------------- 一次性資料匯入 ----------------------------
+ * 給「匯入舊記帳資料」的工具用。先清掉預設種子資料（3個預設帳戶＋5個預設預算群組），
+ * 再寫入真正的帳戶／預算群組／各月與各年的預算彙總／淨資產走勢／本月統計，
+ * 最後把所有交易明細分批（每批最多400筆）寫入，避免超過 Firestore 單次寫入500筆的上限。
+ */
+export async function clearSeedData(uid) {
+  const [accSnap, groupSnap] = await Promise.all([getDocs(col(uid, "accounts")), getDocs(col(uid, "budgetGroups"))]);
+  const batch = writeBatch(db);
+  accSnap.docs.forEach((d) => batch.delete(d.ref));
+  groupSnap.docs.forEach((d) => batch.delete(d.ref));
+  await batch.commit();
+}
+
+export async function importAccounts(uid, accounts) {
+  const batch = writeBatch(db);
+  accounts.forEach((a) => {
+    batch.set(docRef(uid, "accounts", a.id), { name: a.name, type: a.type, balance: a.balance, ...(a.limit ? { limit: a.limit } : {}) });
+  });
+  await batch.commit();
+}
+
+export async function importBudgetGroups(uid, groups) {
+  const batch = writeBatch(db);
+  groups.forEach((g) => {
+    batch.set(doc(col(uid, "budgetGroups")), { name: g.name, subs: g.subs, monthly: g.monthly, annual: g.annual });
+  });
+  await batch.commit();
+}
+
+export async function importBudgetSummaries(uid, monthly, annual) {
+  const entries = [...Object.entries(monthly).map(([k, v]) => ["budgetSummaries", k, v]), ...Object.entries(annual).map(([k, v]) => ["budgetSummariesAnnual", k, v])];
+  for (let i = 0; i < entries.length; i += 400) {
+    const batch = writeBatch(db);
+    entries.slice(i, i + 400).forEach(([col_, key, spentBySub]) => {
+      batch.set(doc(db, "users", uid, col_, key), { spentBySub });
+    });
+    await batch.commit();
+  }
+}
+
+export async function importMeta(uid, { netWorthCounter, netWorthTrend, currentMonthStats }) {
+  const batch = writeBatch(db);
+  batch.set(metaRef(uid, "netWorthCounter"), { value: netWorthCounter });
+  batch.set(metaRef(uid, "netWorthTrend"), { points: netWorthTrend });
+  batch.set(metaRef(uid, "currentMonthStats"), currentMonthStats);
+  await batch.commit();
+}
+
+export async function importTransactionsChunked(uid, transactions, onProgress) {
+  const CHUNK = 400;
+  for (let i = 0; i < transactions.length; i += CHUNK) {
+    const chunk = transactions.slice(i, i + CHUNK);
+    const batch = writeBatch(db);
+    chunk.forEach((t) => {
+      const data =
+        t.type === "transfer"
+          ? { date: t.date, month: t.month, year: t.year, type: "transfer", fromAccountId: t.fromAccountId, toAccountId: t.toAccountId, amount: t.amount, note: t.note || "" }
+          : { date: t.date, month: t.month, year: t.year, type: t.type, category: t.category, sub: t.sub, amount: t.amount, accountId: t.accountId, note: t.note || "" };
+      batch.set(doc(col(uid, "transactions")), data);
+    });
+    await batch.commit();
+    onProgress?.(Math.min(i + CHUNK, transactions.length), transactions.length);
+  }
+}
 export async function ensureSeedData(uid) {
   const accSnap = await getDocs(col(uid, "accounts"));
   if (!accSnap.empty) return false; // 已經有資料了，不重複建立

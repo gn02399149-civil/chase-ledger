@@ -10,6 +10,7 @@ import BatchEntryTab from "./components/BatchEntryTab";
 import ChartTab from "./components/ChartTab";
 import DetailTab from "./components/DetailTab";
 import BudgetTab from "./components/BudgetTab";
+import ImportTool from "./components/ImportTool";
 import {
   ensureSeedData,
   ensureMonthRollover,
@@ -65,6 +66,10 @@ export default function App() {
 
   if (user === undefined) return null; // 判斷登入狀態中，避免畫面閃爍
   if (!user) return <AuthGate />;
+
+  const showImportTool = typeof window !== "undefined" && new URLSearchParams(window.location.search).get("import") === "1";
+  if (showImportTool) return <ImportTool uid={user.uid} />;
+
   if (!ready) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: sans, color: C.inkSoft }}>
@@ -125,7 +130,7 @@ export default function App() {
             <BatchEntryTab uid={user.uid} accounts={accounts} onSubmitted={() => fetchRecentTransactions(user.uid, 6).then(setRecentTx)} />
           )}
           {tab === "chart" && <ChartTab trend={netWorthTrend} currentValue={netWorthCounter} />}
-          {tab === "detail" && <DetailTab uid={user.uid} />}
+          {tab === "detail" && <DetailTab uid={user.uid} accounts={accounts} />}
           {tab === "budget" && <BudgetTab uid={user.uid} groups={budgetGroups} />}
         </div>
       </div>
