@@ -12,7 +12,7 @@ export const EXPENSE_TREE = {
   理財投資:['股票','頭期貸款','房屋貸款'],
   其他:['捐款','雜支','悠遊卡加值'],
 };
-export const INCOME_TREE = { 收入: ["薪資", "獎金", "投資", "其他收入"] };
+export const INCOME_TREE = { 收入: ['薪水','差旅費','利息','股票','其他'] };
 export const ALL_TREE = { ...EXPENSE_TREE, ...INCOME_TREE };
 export const ALL_SUBCATS = Object.values(ALL_TREE).flat();
 export const EXPENSE_SUBCATS = Object.values(EXPENSE_TREE).flat();
