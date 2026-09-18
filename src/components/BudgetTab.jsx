@@ -19,7 +19,7 @@ export default function BudgetTab({ uid, groups }) {
   const [annualSpend, setAnnualSpend] = useState({});
   const [editing, setEditing] = useState(false);
   const [openGroupId, setOpenGroupId] = useState(null);
-  const [newGroup, setNewGroup] = useState({ name: "", subs: [], monthly: "", annual: "" });
+  const [newGroup, setNewGroup] = useState({ name: "", subs: [], monthly: "" });
 
   useEffect(() => subscribeBudgetSummary(uid, month, setMonthlySpend), [uid, month]);
   useEffect(() => subscribeBudgetSummaryAnnual(uid, year, setAnnualSpend), [uid, year]);
@@ -32,17 +32,17 @@ export default function BudgetTab({ uid, groups }) {
       name: newGroup.name,
       subs: newGroup.subs,
       monthly: Number(newGroup.monthly) || 0,
-      annual: Number(newGroup.annual) || 0,
     });
-    setNewGroup({ name: "", subs: [], monthly: "", annual: "" });
+    setNewGroup({ name: "", subs: [] });
   };
   const toggleGroupSub = (g, sub) => {
     const subs = g.subs.includes(sub) ? g.subs.filter((s) => s !== sub) : [...g.subs, sub];
     updateBudgetGroup(uid, g.id, { subs });
   };
 
+  const annualOf = (g) => g.monthly * 12;
   const totalMonthlyBudget = groups.reduce((s, g) => s + g.monthly, 0);
-  const totalAnnualBudget = groups.reduce((s, g) => s + g.annual, 0);
+  const totalAnnualBudget = totalMonthlyBudget * 12;
   const totalMonthlySpend = groups.reduce((s, g) => s + spendOfGroup(monthlySpend, g.subs), 0);
   const totalAnnualSpend = groups.reduce((s, g) => s + spendOfGroup(annualSpend, g.subs), 0);
 
@@ -115,14 +115,7 @@ export default function BudgetTab({ uid, groups }) {
                   className="px-2 py-1 text-sm w-20"
                   style={{ border: `1px solid ${C.line}`, borderRadius: 6, fontFamily: sans }}
                 />
-                <span style={{ fontSize: 12, color: C.inkSoft, fontFamily: sans }}>年預算</span>
-                <input
-                  type="number"
-                  defaultValue={g.annual}
-                  onBlur={(e) => updateBudgetGroup(uid, g.id, { annual: Number(e.target.value) || 0 })}
-                  className="px-2 py-1 text-sm w-24"
-                  style={{ border: `1px solid ${C.line}`, borderRadius: 6, fontFamily: sans }}
-                />
+                <span style={{ fontSize: 11, color: C.inkSoft, fontFamily: sans }}>年預算＝月預算×12＝{fmt(annualOf(g))}</span>
                 <button
                   onClick={() => setOpenGroupId(openGroupId === g.id ? null : g.id)}
                   className="px-2 py-1 text-xs"
@@ -161,14 +154,9 @@ export default function BudgetTab({ uid, groups }) {
                 className="px-2 py-1 text-sm w-20"
                 style={{ border: `1px solid ${C.line}`, borderRadius: 6, fontFamily: sans }}
               />
-              <input
-                type="number"
-                placeholder="年預算"
-                value={newGroup.annual}
-                onChange={(e) => setNewGroup((n) => ({ ...n, annual: e.target.value }))}
-                className="px-2 py-1 text-sm w-24"
-                style={{ border: `1px solid ${C.line}`, borderRadius: 6, fontFamily: sans }}
-              />
+              <span style={{ fontSize: 11, color: C.inkSoft, fontFamily: sans }}>
+                年預算會自動＝月預算×12{newGroup.monthly ? `（${fmt(Number(newGroup.monthly) * 12)}）` : ""}
+              </span>
               <button
                 onClick={addGroup}
                 className="flex items-center gap-1 px-2.5 py-1.5 text-sm"
@@ -189,8 +177,9 @@ export default function BudgetTab({ uid, groups }) {
         {groups.map((g) => {
           const mSpend = spendOfGroup(monthlySpend, g.subs);
           const ySpend = spendOfGroup(annualSpend, g.subs);
+          const gAnnual = annualOf(g);
           const mPct = g.monthly > 0 ? mSpend / g.monthly : 0;
-          const yPct = g.annual > 0 ? ySpend / g.annual : 0;
+          const yPct = gAnnual > 0 ? ySpend / gAnnual : 0;
           return (
             <div key={g.id} className="flex flex-col gap-2.5 px-4 py-3" style={{ background: C.cardBg, border: `1px solid ${C.line}`, borderRadius: 10 }}>
               <div className="flex items-center justify-between" style={{ fontFamily: sans, fontSize: 13.5 }}>
@@ -210,7 +199,7 @@ export default function BudgetTab({ uid, groups }) {
                 <div className="flex items-center justify-between" style={{ fontFamily: sans, fontSize: 12 }}>
                   <span style={{ color: C.inkSoft }}>年度</span>
                   <span style={{ color: yPct > 1 ? C.red : C.inkSoft }}>
-                    {fmt(ySpend)} / {fmt(g.annual)}
+                    {fmt(ySpend)} / {fmt(gAnnual)}
                   </span>
                 </div>
                 <ProgressBar pct={yPct} />

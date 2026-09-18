@@ -6,12 +6,14 @@ import { addTransactionsBatch } from "../lib/db";
 
 export default function BatchEntryTab({ uid, accounts, onSubmitted }) {
   const today = new Date().toISOString().slice(0, 10);
+  const FIRST_EXPENSE_MAIN = Object.keys(EXPENSE_TREE)[0];
+  const FIRST_INCOME_MAIN = Object.keys(INCOME_TREE)[0];
   const blankRow = () => ({
     key: Math.random().toString(36).slice(2),
     date: today,
     type: "expense",
-    main: "餐飲",
-    sub: "午餐",
+    main: FIRST_EXPENSE_MAIN,
+    sub: EXPENSE_TREE[FIRST_EXPENSE_MAIN][0],
     accountId: accounts[0]?.id || "",
     amount: "",
     note: "",
@@ -26,11 +28,11 @@ export default function BatchEntryTab({ uid, accounts, onSubmitted }) {
       rs.map((r) => {
         if (r.key !== key) return r;
         if (field === "type") {
-          const main = val === "income" ? "收入" : "餐飲";
-          return { ...r, type: val, main, sub: ALL_TREE[main][0] };
+          const main = val === "income" ? FIRST_INCOME_MAIN : FIRST_EXPENSE_MAIN;
+          return { ...r, type: val, main, sub: (ALL_TREE[main] || [])[0] };
         }
         if (field === "main") {
-          return { ...r, main: val, sub: ALL_TREE[val][0] };
+          return { ...r, main: val, sub: (ALL_TREE[val] || [])[0] };
         }
         return { ...r, [field]: val };
       })

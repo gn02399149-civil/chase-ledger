@@ -8,6 +8,8 @@ import {
   importBudgetSummaries,
   importMeta,
   importTransactionsChunked,
+  clearTransactionsAndSummaries,
+  overwriteAccountBalances,
 } from "../lib/db";
 
 export default function ImportTool({ uid }) {
@@ -20,6 +22,8 @@ export default function ImportTool({ uid }) {
   const [done, setDone] = useState(false);
   const [err, setErr] = useState("");
 
+  const isOverwrite = !!data?.resetAccounts;
+
   const onPickFile = async (e) => {
     const f = e.target.files?.[0];
     setFile(f || null);
@@ -30,11 +34,58 @@ export default function ImportTool({ uid }) {
     try {
       const text = await f.text();
       const json = JSON.parse(text);
-      if (!json.accounts || !json.transactions) throw new Error("格式不對");
+      if (!json.transactions || (!json.accounts && !json.resetAccounts)) throw new Error("格式不對");
       setData(json);
     } catch (e) {
-      setParseError("這個檔案讀不懂，確認選的是 import-data.json 這個檔案本身。");
+      setParseError("這個檔案讀不懂，確認選的是產生好的 import-data json 檔案本身。");
     }
+  };
+
+  const runFull = async () => {
+    setProgress("清除預設資料中…");
+    await clearSeedData(uid);
+
+    setProgress("寫入帳戶中…");
+    await importAccounts(uid, data.accounts);
+
+    setProgress("寫入預算群組中…");
+    await importBudgetGroups(uid, data.budgetGroups);
+
+    await writeSharedAggregates();
+  };
+
+  const runOverwrite = async () => {
+    setProgress("清除舊的交易明細與預算彙總中…");
+    await clearTransactionsAndSummaries(uid);
+
+    setProgress("依新明細重新計算帳戶餘額中…");
+    await overwriteAccountBalances(uid, data.resetAccounts);
+
+    await writeSharedAggregates();
+  };
+
+  const writeSharedAggregates = async () => {
+    setProgress("寫入每月／每年預算彙總中…");
+    await importBudgetSummaries(uid, data.budgetSummaries, data.budgetSummariesAnnual);
+
+    const nowMonth = thisMonthKey();
+    const stats = data.monthlyStats[nowMonth] || { income: 0, expense: 0 };
+    const points = Object.entries(data.monthlyNetWorthEnd || {})
+      .filter(([m]) => m !== nowMonth)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([month, value]) => ({ month, value }));
+
+    setProgress("寫入淨資產走勢與本月統計中…");
+    await importMeta(uid, {
+      netWorthCounter: data.finalNetWorth,
+      netWorthTrend: points,
+      currentMonthStats: { month: nowMonth, income: stats.income, expense: stats.expense },
+    });
+
+    setProgress(`寫入交易明細中… 0 / ${data.transactions.length}`);
+    await importTransactionsChunked(uid, data.transactions, (doneCount, total) => {
+      setProgress(`寫入交易明細中… ${doneCount} / ${total}`);
+    });
   };
 
   const run = async () => {
@@ -42,37 +93,8 @@ export default function ImportTool({ uid }) {
     setRunning(true);
     setErr("");
     try {
-      setProgress("清除預設資料中…");
-      await clearSeedData(uid);
-
-      setProgress("寫入帳戶中…");
-      await importAccounts(uid, data.accounts);
-
-      setProgress("寫入預算群組中…");
-      await importBudgetGroups(uid, data.budgetGroups);
-
-      setProgress("寫入每月／每年預算彙總中…");
-      await importBudgetSummaries(uid, data.budgetSummaries, data.budgetSummariesAnnual);
-
-      const nowMonth = thisMonthKey();
-      const stats = data.monthlyStats[nowMonth] || { income: 0, expense: 0 };
-      const points = Object.entries(data.monthlyNetWorthEnd || {})
-        .filter(([m]) => m !== nowMonth)
-        .sort(([a], [b]) => (a < b ? -1 : 1))
-        .map(([month, value]) => ({ month, value }));
-
-      setProgress("寫入淨資產走勢與本月統計中…");
-      await importMeta(uid, {
-        netWorthCounter: data.finalNetWorth,
-        netWorthTrend: points,
-        currentMonthStats: { month: nowMonth, income: stats.income, expense: stats.expense },
-      });
-
-      setProgress(`寫入交易明細中… 0 / ${data.transactions.length}`);
-      await importTransactionsChunked(uid, data.transactions, (doneCount, total) => {
-        setProgress(`寫入交易明細中… ${doneCount} / ${total}`);
-      });
-
+      if (isOverwrite) await runOverwrite();
+      else await runFull();
       setDone(true);
       setProgress("");
     } catch (e) {
@@ -82,6 +104,8 @@ export default function ImportTool({ uid }) {
       setRunning(false);
     }
   };
+
+  const thisMonthPreview = data?.monthlyStats?.[thisMonthKey()];
 
   return (
     <div
@@ -97,7 +121,7 @@ export default function ImportTool({ uid }) {
           <div>
             <div style={{ fontFamily: serif, fontSize: 20, fontWeight: 700, color: C.ink }}>資料匯入工具</div>
             <div style={{ fontFamily: sans, fontSize: 12.5, color: C.inkSoft, marginTop: 4 }}>
-              一次性工具，把舊記帳資料匯入這個帳本。這個檔案只會在你的瀏覽器裡處理，不會被上傳到任何地方，也不會存進 GitHub。
+              一次性工具，把記帳資料匯入這個帳本。這個檔案只會在你的瀏覽器裡處理，不會被上傳到任何地方，也不會存進 GitHub。
             </div>
           </div>
 
@@ -108,15 +132,33 @@ export default function ImportTool({ uid }) {
 
               {data && (
                 <div className="flex flex-col gap-2 px-4 py-3" style={{ border: `1px dashed ${C.goldSoft}`, borderRadius: 10 }}>
+                  <div style={{ fontFamily: sans, fontSize: 12, color: C.gold, fontWeight: 700 }}>
+                    {isOverwrite ? "覆蓋模式：只換掉明細資料，帳戶清單／預算群組設定保留" : "完整匯入模式：連帳戶跟預算群組一起建立"}
+                  </div>
                   <div style={{ fontFamily: sans, fontSize: 13, color: C.ink, lineHeight: 1.8 }}>
-                    讀到 <b>{data.transactions.length.toLocaleString()}</b> 筆交易明細、<b>{data.accounts.length}</b> 個帳戶、
-                    <b>{data.budgetGroups.length}</b> 個預算群組。
+                    讀到 <b>{data.transactions.length.toLocaleString()}</b> 筆交易明細
+                    {!isOverwrite && (
+                      <>
+                        、<b>{data.accounts.length}</b> 個帳戶、<b>{data.budgetGroups.length}</b> 個預算群組
+                      </>
+                    )}
+                    。
                     <br />
-                    匯入後總資產會是 <b>{fmt(data.finalNetWorth)}</b>。
+                    {isOverwrite ? "這份明細算出來的" : "匯入後"}總資產會是 <b>{fmt(data.finalNetWorth)}</b>
+                    {isOverwrite && "（只有這份明細的效果，不含你之前的餘額；匯入後可以到「總覽」再手動校正每個帳戶的起始金額）"}。
+                    {thisMonthPreview && (
+                      <>
+                        <br />
+                        本月（依你電腦時間）支出合計 <b>{fmt(thisMonthPreview.expense)}</b>，收入合計 <b>{fmt(thisMonthPreview.income)}</b>，
+                        匯入完成後可以直接去「預算」分頁核對這個數字有沒有對上。
+                      </>
+                    )}
                   </div>
                   <label className="flex items-center gap-2" style={{ fontFamily: sans, fontSize: 12.5, color: C.ink }}>
                     <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
-                    我了解這會清掉目前帳本裡的預設資料，換成匯入的資料
+                    {isOverwrite
+                      ? "我了解這會刪除目前帳本裡「所有」的交易明細，換成這份新的"
+                      : "我了解這會清掉目前帳本裡的預設資料，換成匯入的資料"}
                   </label>
                   <button
                     onClick={run}
@@ -138,6 +180,7 @@ export default function ImportTool({ uid }) {
               <div style={{ fontFamily: sans, fontSize: 14, color: C.green, fontWeight: 700 }}>匯入完成 ✓</div>
               <div style={{ fontFamily: sans, fontSize: 12.5, color: C.inkSoft }}>
                 把網址列後面的 <code>?import=1</code> 拿掉，重新整理頁面，回到正常畫面查看結果。
+                {isOverwrite && "記得去「總覽」把每個帳戶的餘額校正成實際數字（等於補上這份明細沒涵蓋到的起始金額）。"}
               </div>
             </div>
           )}

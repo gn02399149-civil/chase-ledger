@@ -266,6 +266,73 @@ export async function deleteTransaction(uid, t) {
   await batch.commit();
 }
 
+/* ---------------------------- 修改單筆交易 ----------------------------
+ * 做法：把舊資料的影響反向沖銷一次，再套用新資料的影響一次，全部包在同一個 batch 裡，
+ * 最後直接覆蓋同一份交易文件（保留原本的 id），一次 commit。
+ */
+export async function updateTransaction(uid, oldTx, newTx) {
+  const batch = writeBatch(db);
+  const txRef = docRef(uid, "transactions", oldTx.id);
+
+  // 反向沖銷舊資料
+  if (oldTx.type === "transfer") {
+    batch.set(docRef(uid, "accounts", oldTx.fromAccountId), { balance: increment(oldTx.amount) }, { merge: true });
+    batch.set(docRef(uid, "accounts", oldTx.toAccountId), { balance: increment(-oldTx.amount) }, { merge: true });
+  } else {
+    const oldDelta = oldTx.type === "income" ? -oldTx.amount : oldTx.amount;
+    batch.set(docRef(uid, "accounts", oldTx.accountId), { balance: increment(oldDelta) }, { merge: true });
+    batch.set(metaRef(uid, "netWorthCounter"), { value: increment(oldDelta) }, { merge: true });
+    if (oldTx.type === "expense") {
+      batch.set(doc(db, "users", uid, "budgetSummaries", oldTx.month), { spentBySub: { [oldTx.sub]: increment(-oldTx.amount) } }, { merge: true });
+      batch.set(doc(db, "users", uid, "budgetSummariesAnnual", oldTx.year), { spentBySub: { [oldTx.sub]: increment(-oldTx.amount) } }, { merge: true });
+    }
+    if (oldTx.month === thisMonthKey()) {
+      batch.set(
+        metaRef(uid, "currentMonthStats"),
+        { income: increment(oldTx.type === "income" ? -oldTx.amount : 0), expense: increment(oldTx.type === "expense" ? -oldTx.amount : 0) },
+        { merge: true }
+      );
+    }
+  }
+
+  // 套用新資料
+  const month = monthKey(newTx.date);
+  const year = yearKey(newTx.date);
+  let newData;
+  if (newTx.type === "transfer") {
+    newData = {
+      date: newTx.date, month, year, type: "transfer",
+      fromAccountId: newTx.fromAccountId, toAccountId: newTx.toAccountId,
+      amount: newTx.amount, note: newTx.note || "",
+    };
+    batch.set(docRef(uid, "accounts", newTx.fromAccountId), { balance: increment(-newTx.amount) }, { merge: true });
+    batch.set(docRef(uid, "accounts", newTx.toAccountId), { balance: increment(newTx.amount) }, { merge: true });
+  } else {
+    newData = {
+      date: newTx.date, month, year, type: newTx.type,
+      category: newTx.category, sub: newTx.sub, amount: newTx.amount,
+      accountId: newTx.accountId, note: newTx.note || "",
+    };
+    const newDelta = newTx.type === "income" ? newTx.amount : -newTx.amount;
+    batch.set(docRef(uid, "accounts", newTx.accountId), { balance: increment(newDelta) }, { merge: true });
+    batch.set(metaRef(uid, "netWorthCounter"), { value: increment(newDelta) }, { merge: true });
+    if (newTx.type === "expense") {
+      batch.set(doc(db, "users", uid, "budgetSummaries", month), { spentBySub: { [newTx.sub]: increment(newTx.amount) } }, { merge: true });
+      batch.set(doc(db, "users", uid, "budgetSummariesAnnual", year), { spentBySub: { [newTx.sub]: increment(newTx.amount) } }, { merge: true });
+    }
+    if (month === thisMonthKey()) {
+      batch.set(
+        metaRef(uid, "currentMonthStats"),
+        { income: increment(newTx.type === "income" ? newTx.amount : 0), expense: increment(newTx.type === "expense" ? newTx.amount : 0) },
+        { merge: true }
+      );
+    }
+  }
+
+  batch.set(txRef, newData);
+  await batch.commit();
+}
+
 /* ---------------------------- 帳戶間轉帳 ----------------------------
  * 轉帳不算收入也不算支出：只搬動兩個帳戶的餘額，不影響淨資產、不影響預算。
  * 一樣用 increment()，不需要先讀舊餘額。
@@ -386,6 +453,37 @@ export async function importTransactionsChunked(uid, transactions, onProgress) {
     onProgress?.(Math.min(i + CHUNK, transactions.length), transactions.length);
   }
 }
+
+/* ---------------------------- 覆蓋模式：只重置交易明細，保留帳戶清單／預算群組 ----------------------------
+ * 用在「拿一份新的明細檔，整批覆蓋掉之前的明細資料」。跟上面完整匯入的差別：
+ * 不會動 accounts / budgetGroups 這兩個集合本身（名稱、類型、額度、群組設定都保留），
+ * 只清掉 transactions / budgetSummaries / budgetSummariesAnnual，並把每個帳戶的餘額重設成
+ * 「這份新明細重新計算出來的結果」（等於每個帳戶從 0 開始，把這份明細全部重播一次）。
+ */
+export async function clearTransactionsAndSummaries(uid) {
+  const [txSnap, bmSnap, bySnap] = await Promise.all([
+    getDocs(col(uid, "transactions")),
+    getDocs(col(uid, "budgetSummaries")),
+    getDocs(col(uid, "budgetSummariesAnnual")),
+  ]);
+  const allDocs = [...txSnap.docs, ...bmSnap.docs, ...bySnap.docs];
+  for (let i = 0; i < allDocs.length; i += 400) {
+    const batch = writeBatch(db);
+    allDocs.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+}
+
+export async function overwriteAccountBalances(uid, resetMap) {
+  const accSnap = await getDocs(col(uid, "accounts"));
+  const batch = writeBatch(db);
+  accSnap.docs.forEach((d) => {
+    const name = d.data().name;
+    batch.set(d.ref, { balance: resetMap[name] ?? 0 }, { merge: true });
+  });
+  await batch.commit();
+}
+
 export async function ensureSeedData(uid) {
   const accSnap = await getDocs(col(uid, "accounts"));
   if (!accSnap.empty) return false; // 已經有資料了，不重複建立

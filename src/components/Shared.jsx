@@ -1,5 +1,5 @@
 import React from "react";
-import { Wallet, CreditCard, Landmark, Trash2 } from "lucide-react";
+import { Wallet, CreditCard, Landmark, Trash2, Pencil } from "lucide-react";
 import { C, serif, sans, fmt } from "../lib/theme";
 import { EXPENSE_TREE } from "../lib/categories";
 
@@ -114,7 +114,7 @@ export function SubPicker({ selected, onToggle }) {
   );
 }
 
-export function TxRow({ t, isFirst, onDelete, accountNameOf }) {
+export function TxRow({ t, isFirst, onDelete, onEdit, accountNameOf }) {
   const isTransfer = t.type === "transfer";
   const nameOf = accountNameOf || ((id) => id);
   return (
@@ -135,6 +135,11 @@ export function TxRow({ t, isFirst, onDelete, accountNameOf }) {
           {isTransfer ? "" : t.type === "expense" ? "-" : "+"}
           {fmt(t.amount).replace("NT$ ", "")}
         </span>
+        {onEdit && (
+          <button onClick={() => onEdit(t)} style={{ color: C.inkSoft }} title="編輯這筆">
+            <Pencil size={14} />
+          </button>
+        )}
         {onDelete && (
           <button onClick={() => onDelete(t)} style={{ color: C.inkSoft }} title="刪除這筆">
             <Trash2 size={14} />
