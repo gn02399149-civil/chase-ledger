@@ -1,8 +1,61 @@
 import React, { useState } from "react";
-import { TrendingUp, TrendingDown, Plus, Trash2, X, ArrowLeftRight } from "lucide-react";
+import { TrendingUp, TrendingDown, Plus, Trash2, X, ArrowLeftRight, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
 import { C, serif, sans, fmt } from "../lib/theme";
 import { AccountCard, TxRow } from "./Shared";
-import { addAccount, addTransfer, correctAccountBalance, deleteAccount, deleteTransaction, updateAccountMeta } from "../lib/db";
+import { addAccount, addTransfer, correctAccountBalance, deleteAccount, deleteTransaction, reorderAccounts, updateAccountMeta } from "../lib/db";
+
+function ReorderPanel({ uid, items, onClose }) {
+  const [order, setOrder] = useState(items.map((a) => a.id));
+  const [saving, setSaving] = useState(false);
+  const move = (idx, dir) => {
+    const next = [...order];
+    const j = idx + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[idx], next[j]] = [next[j], next[idx]];
+    setOrder(next);
+  };
+  const save = async () => {
+    setSaving(true);
+    await reorderAccounts(uid, order);
+    setSaving(false);
+    onClose();
+  };
+  const nameOf = (id) => items.find((a) => a.id === id)?.name || id;
+
+  return (
+    <div className="flex flex-col gap-2 px-4 py-3" style={{ border: `1px dashed ${C.goldSoft}`, borderRadius: 10, background: "#FBF4E7" }}>
+      <div className="flex items-center justify-between">
+        <span style={{ fontFamily: sans, fontSize: 12.5, color: C.inkSoft }}>調整帳戶顯示順序</span>
+        <button onClick={onClose} style={{ color: C.inkSoft }}>
+          <X size={15} />
+        </button>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {order.map((id, idx) => (
+          <div key={id} className="flex items-center justify-between px-3 py-1.5" style={{ background: "#fff", border: `1px solid ${C.line}`, borderRadius: 8 }}>
+            <span style={{ fontFamily: sans, fontSize: 13, color: C.ink }}>{nameOf(id)}</span>
+            <div className="flex items-center gap-1">
+              <button onClick={() => move(idx, -1)} disabled={idx === 0} style={{ color: idx === 0 ? C.line : C.inkSoft }}>
+                <ChevronUp size={16} />
+              </button>
+              <button onClick={() => move(idx, 1)} disabled={idx === order.length - 1} style={{ color: idx === order.length - 1 ? C.line : C.inkSoft }}>
+                <ChevronDown size={16} />
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button
+        onClick={save}
+        disabled={saving}
+        className="px-3 py-1.5 text-sm self-start"
+        style={{ background: C.gold, color: "#fff", borderRadius: 6, fontFamily: sans, opacity: saving ? 0.6 : 1 }}
+      >
+        {saving ? "儲存中…" : "儲存順序"}
+      </button>
+    </div>
+  );
+}
 
 function TransferForm({ uid, accounts, onClose }) {
   const today = new Date().toISOString().slice(0, 10);
@@ -202,6 +255,7 @@ function AccountEditor({ uid, account, onClose }) {
 export default function OverviewTab({ uid, accounts, monthStats, recentTx, onRefreshRecent }) {
   const [editingId, setEditingId] = useState(null); // null=無, 'new'=新增, id=編輯某帳戶
   const [transferring, setTransferring] = useState(false);
+  const [reordering, setReordering] = useState(false);
   const editingAccount = editingId && editingId !== "new" ? accounts.find((a) => a.id === editingId) : null;
   const nameOf = (id) => accounts.find((a) => a.id === id)?.name || id;
 
@@ -236,6 +290,16 @@ export default function OverviewTab({ uid, accounts, monthStats, recentTx, onRef
               帳戶轉帳
             </button>
           )}
+          {accounts.length >= 2 && (
+            <button
+              onClick={() => setReordering((v) => !v)}
+              className="flex flex-col items-center justify-center gap-1 px-4 py-3 min-w-[110px]"
+              style={{ border: `1px dashed ${C.line}`, borderRadius: 10, color: C.inkSoft, fontFamily: sans, fontSize: 12.5 }}
+            >
+              <ArrowUpDown size={16} />
+              調整順序
+            </button>
+          )}
         </div>
         {editingId && (
           <div className="mt-3">
@@ -245,6 +309,11 @@ export default function OverviewTab({ uid, accounts, monthStats, recentTx, onRef
         {transferring && (
           <div className="mt-3">
             <TransferForm uid={uid} accounts={accounts} onClose={() => setTransferring(false)} />
+          </div>
+        )}
+        {reordering && (
+          <div className="mt-3">
+            <ReorderPanel uid={uid} items={accounts} onClose={() => setReordering(false)} />
           </div>
         )}
       </div>

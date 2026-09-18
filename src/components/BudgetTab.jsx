@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, Settings2, Plus, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Settings2, Plus, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { C, serif, sans, fmt, monthLabel, addMonths } from "../lib/theme";
 import { ProgressBar, SubPicker } from "./Shared";
-import { addBudgetGroup, deleteBudgetGroup, updateBudgetGroup, subscribeBudgetSummary, thisMonthKey } from "../lib/db";
+import { addBudgetGroup, deleteBudgetGroup, updateBudgetGroup, reorderBudgetGroups, subscribeBudgetSummary, thisMonthKey } from "../lib/db";
 
 export default function BudgetTab({ uid, groups }) {
   const [month, setMonth] = useState(thisMonthKey());
@@ -53,6 +53,13 @@ export default function BudgetTab({ uid, groups }) {
   const toggleGroupSub = (g, sub) => {
     const subs = g.subs.includes(sub) ? g.subs.filter((s) => s !== sub) : [...g.subs, sub];
     updateBudgetGroup(uid, g.id, { subs });
+  };
+  const moveGroup = (idx, dir) => {
+    const j = idx + dir;
+    if (j < 0 || j >= groups.length) return;
+    const ids = groups.map((g) => g.id);
+    [ids[idx], ids[j]] = [ids[j], ids[idx]];
+    reorderBudgetGroups(uid, ids);
   };
 
   const annualOf = (g) => g.monthly * 12; // 群組管理面板裡單純顯示「滿一整年會是多少」，方便設定時參考
@@ -120,9 +127,17 @@ export default function BudgetTab({ uid, groups }) {
           <div style={{ fontFamily: sans, fontSize: 12.5, color: C.inkSoft }}>
             自訂預算群組——每個群組可自由勾選任何大項目下的次要項目（例如「早餐＋晚餐」跨不同分類組合）
           </div>
-          {groups.map((g) => (
+          {groups.map((g, idx) => (
             <div key={g.id} className="flex flex-col gap-2 px-3 py-2.5" style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: "#fff" }}>
               <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-col" style={{ lineHeight: 1 }}>
+                  <button onClick={() => moveGroup(idx, -1)} disabled={idx === 0} style={{ color: idx === 0 ? C.line : C.inkSoft }}>
+                    <ChevronUp size={14} />
+                  </button>
+                  <button onClick={() => moveGroup(idx, 1)} disabled={idx === groups.length - 1} style={{ color: idx === groups.length - 1 ? C.line : C.inkSoft }}>
+                    <ChevronDown size={14} />
+                  </button>
+                </div>
                 <input
                   defaultValue={g.name}
                   onBlur={(e) => e.target.value !== g.name && updateBudgetGroup(uid, g.id, { name: e.target.value })}

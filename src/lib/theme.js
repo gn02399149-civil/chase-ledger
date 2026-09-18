@@ -30,3 +30,12 @@ export const addMonths = (ym, delta) => {
   const dt = new Date(y, m - 1 + delta, 1);
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`;
 };
+
+// 依自訂的 order 欄位排序；還沒設定過順序的項目（order是undefined）排在最後，並依名稱穩定排序
+export const sortByOrder = (list) =>
+  [...list].sort((a, b) => {
+    const ao = a.order ?? Infinity;
+    const bo = b.order ?? Infinity;
+    if (ao !== bo) return ao - bo;
+    return (a.name || "").localeCompare(b.name || "", "zh-Hant");
+  });

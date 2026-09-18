@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { Receipt, ListPlus, TrendingUp, Wallet, PiggyBank, LogOut } from "lucide-react";
 import { auth } from "./firebase";
-import { C, serif, sans, fmt } from "./lib/theme";
+import { C, serif, sans, fmt, sortByOrder } from "./lib/theme";
 import { Seal, TabButton } from "./components/Shared";
 import AuthGate from "./components/AuthGate";
 import OverviewTab from "./components/OverviewTab";
@@ -51,11 +51,11 @@ export default function App() {
       await ensureSeedData(user.uid);
       await ensureMonthRollover(user.uid);
       unsub = [
-        subscribeAccounts(user.uid, setAccounts),
+        subscribeAccounts(user.uid, (list) => setAccounts(sortByOrder(list))),
         subscribeNetWorthCounter(user.uid, setNetWorthCounter),
         subscribeNetWorthTrend(user.uid, setNetWorthTrend),
         subscribeCurrentMonthStats(user.uid, setMonthStats),
-        subscribeBudgetGroups(user.uid, setBudgetGroups),
+        subscribeBudgetGroups(user.uid, (list) => setBudgetGroups(sortByOrder(list))),
       ];
       const recent = await fetchRecentTransactions(user.uid, 6);
       setRecentTx(recent);

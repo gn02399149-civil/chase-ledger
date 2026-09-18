@@ -72,6 +72,12 @@ export async function deleteAccount(uid, id, currentBalance) {
   await setDoc(metaRef(uid, "netWorthCounter"), { value: increment(-currentBalance) }, { merge: true });
 }
 
+export async function reorderAccounts(uid, orderedIds) {
+  const batch = writeBatch(db);
+  orderedIds.forEach((id, i) => batch.set(docRef(uid, "accounts", id), { order: i }, { merge: true }));
+  await batch.commit();
+}
+
 /* ---------------------------- 淨資產 / 本月統計（各只有 1 份文件） ---------------------------- */
 export function subscribeNetWorthCounter(uid, cb) {
   return onSnapshot(metaRef(uid, "netWorthCounter"), (snap) => {
@@ -104,6 +110,12 @@ export async function updateBudgetGroup(uid, id, patch) {
 }
 export async function deleteBudgetGroup(uid, id) {
   await deleteDoc(docRef(uid, "budgetGroups", id));
+}
+
+export async function reorderBudgetGroups(uid, orderedIds) {
+  const batch = writeBatch(db);
+  orderedIds.forEach((id, i) => batch.set(docRef(uid, "budgetGroups", id), { order: i }, { merge: true }));
+  await batch.commit();
 }
 
 /* ---------------------------- 預算花費彙總（月 / 年各 1 份文件） ---------------------------- */
