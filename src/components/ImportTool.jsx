@@ -10,7 +10,54 @@ import {
   importTransactionsChunked,
   clearTransactionsAndSummaries,
   overwriteAccountBalances,
+  repairBudgetSummaries,
 } from "../lib/db";
+
+function RepairPanel({ uid }) {
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [result, setResult] = useState(null);
+  const [err, setErr] = useState("");
+
+  const run = async () => {
+    setRunning(true);
+    setErr("");
+    setResult(null);
+    try {
+      const r = await repairBudgetSummaries(uid, setProgress);
+      setResult(r);
+    } catch (e) {
+      console.error(e);
+      setErr("修復失敗（" + (e?.message || "未知錯誤") + "），重新整理頁面再試一次。");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2 px-4 py-3" style={{ border: `1px solid ${C.line}`, borderRadius: 10, background: "#fff" }}>
+      <div style={{ fontFamily: sans, fontSize: 13, color: C.ink, fontWeight: 700 }}>修復預算彙總</div>
+      <div style={{ fontFamily: sans, fontSize: 12, color: C.inkSoft, lineHeight: 1.6 }}>
+        如果「預算」分頁的金額對不上明細裡的真實支出，用這個修復：直接讀取你現有的交易明細重新計算，不需要重新上傳任何檔案。
+      </div>
+      <button
+        onClick={run}
+        disabled={running}
+        className="px-3 py-1.5 text-sm self-start"
+        style={{ background: C.gold, color: "#fff", borderRadius: 6, fontFamily: sans, opacity: running ? 0.6 : 1 }}
+      >
+        {running ? "修復中…" : "開始修復"}
+      </button>
+      {progress && running && <div style={{ fontFamily: sans, fontSize: 12, color: C.inkSoft }}>{progress}</div>}
+      {result && (
+        <div style={{ fontFamily: sans, fontSize: 12.5, color: C.green }}>
+          修復完成 ✓ 讀取了 {result.transactionCount.toLocaleString()} 筆交易，重建了 {result.monthCount} 個月份的預算彙總。回去「預算」分頁看看數字有沒有對上。
+        </div>
+      )}
+      {err && <div style={{ fontFamily: sans, fontSize: 12.5, color: C.red }}>{err}</div>}
+    </div>
+  );
+}
 
 export default function ImportTool({ uid }) {
   const [file, setFile] = useState(null);
@@ -127,6 +174,10 @@ export default function ImportTool({ uid }) {
 
           {!done && (
             <>
+              <RepairPanel uid={uid} />
+
+              <div style={{ fontFamily: sans, fontSize: 12, color: C.inkSoft, textAlign: "center" }}>— 或者，重新匯入整份檔案 —</div>
+
               <input type="file" accept="application/json" onChange={onPickFile} style={{ fontFamily: sans, fontSize: 13 }} />
               {parseError && <div style={{ color: C.red, fontFamily: sans, fontSize: 12.5 }}>{parseError}</div>}
 

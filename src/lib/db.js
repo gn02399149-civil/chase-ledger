@@ -419,7 +419,11 @@ export async function importBudgetGroups(uid, groups) {
 }
 
 export async function importBudgetSummaries(uid, monthly, annual) {
-  const entries = [...Object.entries(monthly).map(([k, v]) => ["budgetSummaries", k, v]), ...Object.entries(annual).map(([k, v]) => ["budgetSummariesAnnual", k, v])];
+  const unwrap = (v) => v?.spentBySub || v || {}; // 匯入資料裡是 {spentBySub:{...}}，這裡把內層的map取出來，避免變成雙層包裝
+  const entries = [
+    ...Object.entries(monthly).map(([k, v]) => ["budgetSummaries", k, unwrap(v)]),
+    ...Object.entries(annual).map(([k, v]) => ["budgetSummariesAnnual", k, unwrap(v)]),
+  ];
   for (let i = 0; i < entries.length; i += 400) {
     const batch = writeBatch(db);
     entries.slice(i, i + 400).forEach(([col_, key, spentBySub]) => {
@@ -427,6 +431,49 @@ export async function importBudgetSummaries(uid, monthly, annual) {
     });
     await batch.commit();
   }
+}
+
+/* ---------------------------- 修復預算彙總 ----------------------------
+ * 不需要重新上傳檔案：直接讀取 Firestore 裡已經匯入好的 transactions（一次性讀取，只在修復時用），
+ * 在瀏覽器裡重新算一次每月／每年各次要項目的花費，蓋掉舊的（可能是壞掉的）budgetSummaries。
+ */
+export async function repairBudgetSummaries(uid, onProgress) {
+  onProgress?.("讀取現有交易明細中…");
+  const snap = await getDocs(col(uid, "transactions"));
+  const monthly = {};
+  const annual = {};
+  snap.docs.forEach((d) => {
+    const t = d.data();
+    if (t.type !== "expense") return;
+    monthly[t.month] = monthly[t.month] || {};
+    monthly[t.month][t.sub] = (monthly[t.month][t.sub] || 0) + t.amount;
+    annual[t.year] = annual[t.year] || {};
+    annual[t.year][t.sub] = (annual[t.year][t.sub] || 0) + t.amount;
+  });
+
+  onProgress?.("清除舊的預算彙總中…");
+  const [bmSnap, bySnap] = await Promise.all([getDocs(col(uid, "budgetSummaries")), getDocs(col(uid, "budgetSummariesAnnual"))]);
+  const toDelete = [...bmSnap.docs, ...bySnap.docs];
+  for (let i = 0; i < toDelete.length; i += 400) {
+    const batch = writeBatch(db);
+    toDelete.slice(i, i + 400).forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+
+  onProgress?.("寫入重新計算好的預算彙總中…");
+  const entries = [
+    ...Object.entries(monthly).map(([k, v]) => ["budgetSummaries", k, v]),
+    ...Object.entries(annual).map(([k, v]) => ["budgetSummariesAnnual", k, v]),
+  ];
+  for (let i = 0; i < entries.length; i += 400) {
+    const batch = writeBatch(db);
+    entries.slice(i, i + 400).forEach(([col_, key, spentBySub]) => {
+      batch.set(doc(db, "users", uid, col_, key), { spentBySub });
+    });
+    await batch.commit();
+  }
+  onProgress?.("完成");
+  return { transactionCount: snap.docs.length, monthCount: Object.keys(monthly).length };
 }
 
 export async function importMeta(uid, { netWorthCounter, netWorthTrend, currentMonthStats }) {
